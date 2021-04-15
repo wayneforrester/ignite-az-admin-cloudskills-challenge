@@ -1,2 +1,2 @@
 # ignite-az-admin-cloudskills-challenge
-Code created during the Microsoft Ignite Azure Admin Cloudskills Challenge
+This repository contains code that was created as part of the Microsoft Ignite Azure Admin Cloudskills Challenge.
