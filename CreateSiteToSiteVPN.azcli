@@ -1,0 +1,176 @@
+# Create Azure-side resources
+# Create Azure-VNet-1 vnet and Services subnet
+az network vnet create \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --name Azure-VNet-1 \
+    --address-prefix 10.0.0.0/16 \
+    --subnet-name Services \
+    --subnet-prefix 10.0.0.0/24
+
+# Add GatewaySubnet subnet to Azure-VNet-1
+az network vnet subnet create \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --vnet-name Azure-VNet-1 \
+    --address-prefix 10.0.255.0/27 \
+    --name GatewaySubnet
+
+# Create LNG-HQ-Network local network gateway
+az network local-gateway create \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --gateway-ip-address 94.0.252.160 \ # needs to be updates once this is created, ideally have this created before
+    --name LNG-HQ-Network \
+    --local-address-prefixes 172.16.0.0/16
+
+# Create simulated on-premises network and resources
+# Create HQ-Network vnet and Applications subnet
+az network vnet create \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --name HQ-Network \
+    --address-prefix 172.16.0.0/16 \
+    --subnet-name Applications \
+    --subnet-prefix 172.16.0.0/24
+
+# Add GatewaySubnet to HQ-Network
+az network vnet subnet create \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --address-prefix 172.16.255.0/27 \
+    --name GatewaySubnet \
+    --vnet-name HQ-Network
+
+# Create LNG-Azure-Vnet-1 local network gateway
+az network local-gateway create \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --gateway-ip-address 94.0.252.160 \ # needs to be updates once this is created, ideally have this created before
+    --name LNG-Azure-VNet-1 \
+    --local-address-prefixes 10.0.0.0/16
+
+# Check topology
+# Verify vnets
+az network vnet list --output table
+
+# Verify local network gateways
+az network local-gateway list \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --output table
+
+# Create Azure side VPN gateway
+# Create PIP-VNG-Azure-VNet-1 public IP address
+az network public-ip create \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --name PIP-VNG-Azure-VNet-1 \
+    --allocation-method Dynamic
+
+# Create VNG-Azure-VNet-1 virtual network
+az network vnet create \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --name VNG-Azure-VNet-1 \
+    --subnet-name GatewaySubnet
+
+# Create VNG-Azure-VNet-1 virtual network gateway
+# NOTE: this can take up to 45 mins to create so --no-wait is used
+az network vnet-gateway create \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --name VNG-Azure-VNet-1 \
+    --public-ip-address PIP-VNG-Azure-VNet-1 \
+    --vnet VNG-Azure-VNet-1 \
+    --gateway-type Vpn \
+    --vpn-type RouteBased \
+    --sku VpnGw1 \
+    --no-wait
+
+# Create on-premises VPN gateway
+# Create PIP-VNG-HQ-Network public IP address
+az network public-ip create \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --name PIP-VNG-HQ-Network \
+    --allocation-method Dynamic
+
+# Create VNG-HQ-Network virtual network
+az network vnet create \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --name VNG-HQ-Network \
+    --subnet-name GatewaySubnet
+
+# Create VNG-HQ-Network virtual network gatway
+# NOTE: this can take up to 45 mins to create so --no-wait is used
+az network vnet-gateway create \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --name VNG-HQ-Network \
+    --public-ip-address PIP-VNG-HQ-Network \
+    --vnet HQ-Network \
+    --gateway-type Vpn \
+    --vpn-type RouteBased \
+    --sku VpnGw1 \
+    --no-wait
+
+# check for virtual network gateway creation to complte
+# command uses watch Linux command to run check periodically
+# Ctrl+c to quit the wait command
+watch -d -n 5 az network vnet-gateway list \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --output table
+
+# Update local network gateay IP ref
+# gateways need to be successfully deployed before continuing
+# Check both virtual network gateways have been completed
+az network vnet-gateway list \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --query "[?provisioningState=='Succeeded']" \
+    --output table
+
+# Get IPv4 address assigened to PIP-VNG-Azure-VNet-1 and store in a var
+PIPVNGAZUREVNET1=$(az network public-ip show \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --name PIP-VNG-Azure-VNet-1 \
+    --query "[ipAddress]" \
+    --output tsv)
+
+# Update LNG-Azure-VNet-1 local network gateway to point to 
+# public IP attached to VNG-Azure-VNet-1 virtual network gateway
+az network local-gateway update \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --name LNG-Azure-VNet-1 \
+    --gateway-ip-address $PIPVNGAZUREVNET1
+
+# Get IPv4 address assigened to PIP-VNG-HQ-Network and store in a var
+PIPVNGHQNETWORK=$(az network public-ip show \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --name PIP-VNG-HQ-Network \
+    --query "[ipAddress]" \
+    --output tsv)
+
+# Update LNG-HQ-Network local network gateway  to point to
+# public IP attached to VNG-HQ-Netowk virtual network gateway
+az network local-gateway update \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --name LNG-HQ-Network \
+    --gateway-ip-address $PIPVNGHQNETWORK
+
+# Create connections from each VPN gateway to the local network gateway that 
+# contains the public IP refs for that gateways remote network
+# Assign a IPSec pre-shared key used for the connections. Must be ASCII chars no longer that 128 chars
+SHAREDKEY=123456789
+
+# Create a connection from VNG-Azure-VNet-1 to LNG-HQ-Network
+az network vpn-connection create \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --name Azure-VNet-1-To-HQ-Network \
+    --vnet-gateway1 VNG-Azure-VNet-1 \
+    --shared-key $SHAREDKEY \
+    --local-gateway2 LNG-HQ-Network
+
+# Create a connection from VNG-HQ-Network to LNG-Azure-VNet-1
+az network vpn-connection create \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --name HQ-Network-To-Azure-VNet-1  \
+    --vnet-gateway1 VNG-HQ-Network \
+    --shared-key $SHAREDKEY \
+    --local-gateway2 LNG-Azure-VNet-1
+
+# Verify VPN tunnels are connected
+# confirm that Azure-VNet-1-To-HQ-Network is connected
+az network vpn-connection show \
+    --resource-group learn-9a85232d-6500-4ad4-9c16-fa64fb54a8b1 \
+    --name Azure-VNet-1-To-HQ-Network  \
+    --output table \
+    --query '{Name:name,ConnectionStatus:connectionStatus}'

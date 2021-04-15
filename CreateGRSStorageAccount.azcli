@@ -1,0 +1,32 @@
+
+# Create storeage account
+export STORAGEACCT=learnazurefileshare$RANDOM
+
+az storage account create \
+    --name $STORAGEACCT \
+    --resource-group learn-f7189741-85af-4d25-8acc-d61497bee7b8 \
+    --sku Standard_GRS
+
+# save key 
+STORAGEKEY=$(az storage account keys list \
+    --resource-group learn-f7189741-85af-4d25-8acc-d61497bee7b8 \
+    --account-name $STORAGEACCT \
+    --query "[0].value" | tr -d '"')
+
+# Creat file shares
+az storage share create \
+    --account-name $STORAGEACCT \
+    --account-key $STORAGEKEY \
+    --name "reports"
+
+az storage share create \
+    --account-name $STORAGEACCT \
+    --account-key $STORAGEKEY \
+    --name "data"
+
+# Create Windows server VM to simulate on-premises machine
+az vm create \
+    --resource-group learn-f7189741-85af-4d25-8acc-d61497bee7b8 \
+    --name 2019FileServer \
+    --image Win2019Datacenter \
+    --admin-username azureuser

@@ -1,0 +1,241 @@
+
+# Create resource group
+RG=rg-AppGatewayDemo
+az group create --name $RG --location eastus
+
+# create vnet and subnet
+az network vnet create \
+  --resource-group $RG \
+  --name vehicleAppVnet \
+  --address-prefix 10.0.0.0/16 \
+  --subnet-name webServerSubnet \
+  --subnet-prefix 10.0.1.0/24
+
+  # donwload script to create VMs
+  git clone https://github.com/MicrosoftDocs/mslearn-load-balance-web-traffic-with-application-gateway module-files
+
+# Create VMs using downloaded script - see --custom-data param
+az vm create \
+  --resource-group $RG \
+  --name webServer1 \
+  --image UbuntuLTS \
+  --admin-username azureuser \
+  --generate-ssh-keys \
+  --vnet-name vehicleAppVnet \
+  --subnet webServerSubnet \
+  --public-ip-address "" \
+  --nsg "" \
+  --custom-data module-files/scripts/vmconfig.sh \
+  --no-wait
+
+az vm create \
+  --resource-group $RG \
+  --name webServer2 \
+  --image UbuntuLTS \
+  --admin-username azureuser \
+  --generate-ssh-keys \
+  --vnet-name vehicleAppVnet \
+  --subnet webServerSubnet \
+  --public-ip-address "" \
+  --nsg "" \
+  --custom-data module-files/scripts/vmconfig.sh
+
+# check VMs are created
+az vm list \
+  --resource-group $RG \
+  --show-details \
+  --output table
+
+#Create App Servcice
+APPSERVICE="licenserenewal$RANDOM"
+
+# create App Service plan
+az appservice plan create \
+    --resource-group $RG \
+    --name vehicleAppServicePlan \
+    --sku S1
+
+# Create Web App and deploy website - see --deployment-source-url param
+az webapp create \
+    --resource-group $RG \
+    --name $APPSERVICE \
+    --plan vehicleAppServicePlan \
+    --deployment-source-url https://github.com/MicrosoftDocs/mslearn-load-balance-web-traffic-with-application-gateway \
+    --deployment-source-branch appService --runtime "DOTNETCORE|2.1"
+
+# Config network for App Gateway
+# Create private subnet
+az network vnet subnet create \
+  --resource-group $RG \
+  --vnet-name vehicleAppVnet  \
+  --name appGatewaySubnet \
+  --address-prefixes 10.0.0.0/24
+
+# Crate public ip and DNS label for App Gateway
+az network public-ip create \
+  --resource-group $RG \
+  --name appGatewayPublicIp \
+  --sku Standard \
+  --dns-name vehicleapp${RANDOM}
+
+# Creaet App gateway with:
+# A back-end pool containing the IP addresses of the web server virtual machines.
+# A firewall that blocks malicious requests, such as those used by SQL Injection and Cross-Site Scripting attacks.
+# A temporary listener that listens to port 8080, this will be replaced in a later step but is required for Application Gateway creation.
+# A rule that routes (and load balances) these requests to the web servers in the back-end pool.
+az network application-gateway create \
+--resource-group $RG \
+--name vehicleAppGateway \
+--sku WAF_v2 \
+--capacity 2 \
+--vnet-name vehicleAppVnet \
+--subnet appGatewaySubnet \
+--public-ip-address appGatewayPublicIp \
+--http-settings-protocol Http \
+--http-settings-port 8080 \
+--private-ip-address 10.0.0.4 \
+--frontend-port 8080
+
+# Get private IPs of VMs
+az vm list-ip-addresses \
+  --resource-group $RG \
+  --name webServer1 \
+  --query [0].virtualMachine.network.privateIpAddresses[0] \
+  --output tsv
+
+az vm list-ip-addresses \
+  --resource-group $RG \
+  --name webserver2 \
+  --query [0].virtualMachine.network.privateIpAddresses[0] \
+  --output tsv
+
+# Add back-end pools for each web site
+# pool for vehicle reg site
+# make sure IPs match with ones from previous commands
+az network application-gateway address-pool create \
+  --gateway-name vehicleAppGateway \
+  --resource-group $RG \
+  --name vmPool \
+  --servers 10.0.1.4 10.0.1.5
+
+# Create back-end pool for license renewal site
+az network application-gateway address-pool create \
+    --resource-group $RG \
+    --gateway-name vehicleAppGateway \
+    --name appServicePool \
+    --servers $APPSERVICE.azurewebsites.net
+
+# For port 80, create front-end port
+az network application-gateway frontend-port create \
+    --resource-group $RG \
+    --gateway-name vehicleAppGateway \
+    --name port80 \
+    --port 80
+
+# Create listener to handle requests on port 80
+az network application-gateway http-listener create \
+    --resource-group $RG \
+    --name vehicleListener \
+    --frontend-port port80 \
+    --frontend-ip appGatewayFrontendIP \
+    --gateway-name vehicleAppGateway
+
+# Add health probe - runs every 15 seconds (--interval 15), sends HTTP GET
+# If no response in 10 secs (--timeout 10), probe times out
+# If probe fails 3 times (--threshold 3) in succession, web server is marked as unhealthy
+
+az network application-gateway probe create \
+    --resource-group $RG \
+    --gateway-name vehicleAppGateway \
+    --name customProbe \
+    --path / \
+    --interval 15 \
+    --threshold 3 \
+    --timeout 10 \
+    --protocol Http \
+    --host-name-from-http-settings true
+
+# Create HTTP settings to enable health probe for gateway
+az network application-gateway http-settings create \
+    --resource-group $RG \
+    --gateway-name vehicleAppGateway \
+    --name appGatewayBackendHttpSettings \
+    --host-name-from-backend-pool true \
+    --port 80 \
+    --probe customProbe
+
+# Config path-based routing
+# Create path map for vmPool
+az network application-gateway url-path-map create \
+    --resource-group $RG \
+    --gateway-name vehicleAppGateway \
+    --name urlPathMap \
+    --paths /VehicleRegistration/* \
+    --http-settings appGatewayBackendHttpSettings \
+    --address-pool vmPool
+
+# Create path map rule for appServicePool
+az network application-gateway url-path-map rule create \
+    --resource-group $RG \
+    --gateway-name vehicleAppGateway \
+    --name appServiceUrlPathMap \
+    --paths /LicenseRenewal/* \
+    --http-settings appGatewayBackendHttpSettings \
+    --address-pool appServicePool \
+    --path-map-name urlPathMap
+
+# Create routing rule using above path maps
+az network application-gateway rule create \
+    --resource-group $RG \
+    --gateway-name vehicleAppGateway \
+    --name appServiceRule \
+    --http-listener vehicleListener \
+    --rule-type PathBasedRouting \
+    --address-pool appServicePool \
+    --url-path-map urlPathMap
+
+# Delete no longer needed default rule that was created when App Gateway was initially deplyed
+az network application-gateway rule delete \
+    --resource-group $RG \
+    --gateway-name vehicleAppGateway \
+    --name rule1
+
+# Testing App Gateway
+# Generate root UTL of App gateway
+echo http://$(az network public-ip show \
+  --resource-group $RG \
+  --name appGatewayPublicIp \
+  --query dnsSettings.fqdn \
+  --output tsv)
+
+# http://vehicleapp24741.eastus.cloudapp.azure.com
+
+# Deallocate webServer1
+az vm deallocate \
+  --resource-group $RG \
+  --name webServer1
+
+# Test website - check name doesnt change
+
+# Restart webServer1
+az vm start \
+  --resource-group $RG \
+  --name webServer1
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

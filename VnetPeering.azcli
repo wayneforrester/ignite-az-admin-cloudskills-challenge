@@ -1,0 +1,190 @@
+# create 3 required vnets
+az network vnet create \
+    --resource-group learn-0e79cd83-42e4-44c6-b8a2-a85b0e8db1b6 \
+    --name SalesVNet \
+    --address-prefix 10.1.0.0/16 \
+    --subnet-name Apps \
+    --subnet-prefix 10.1.1.0/24 \
+    --location northeurope
+
+az network vnet create \
+    --resource-group learn-0e79cd83-42e4-44c6-b8a2-a85b0e8db1b6 \
+    --name MarketingVNet \
+    --address-prefix 10.2.0.0/16 \
+    --subnet-name Apps \
+    --subnet-prefix 10.2.1.0/24 \
+    --location northeurope
+
+az network vnet create \
+    --resource-group learn-0e79cd83-42e4-44c6-b8a2-a85b0e8db1b6 \
+    --name ResearchVNet \
+    --address-prefix 10.3.0.0/16 \
+    --subnet-name Data \
+    --subnet-prefix 10.3.1.0/24 \
+    --location westeurope
+
+# confirm vnet config
+az network vnet list --output table
+
+# vreate Ubuntu VMs in each vnet, subnets are created by specifying then as part of the vm
+az vm create \
+    --resource-group learn-0e79cd83-42e4-44c6-b8a2-a85b0e8db1b6 \
+    --no-wait \
+    --name SalesVM \
+    --location northeurope \
+    --vnet-name SalesVNet \
+    --subnet Apps \
+    --image UbuntuLTS \
+    --admin-username azureuser \
+    --admin-password <password>
+
+az vm create \
+    --resource-group learn-0e79cd83-42e4-44c6-b8a2-a85b0e8db1b6 \
+    --no-wait \
+    --name MarketingVM \
+    --location northeurope \
+    --vnet-name MarketingVNet \
+    --subnet Apps \
+    --image UbuntuLTS \
+    --admin-username azureuser \
+    --admin-password <password>
+
+az vm create \
+    --resource-group learn-0e79cd83-42e4-44c6-b8a2-a85b0e8db1b6 \
+    --no-wait \
+    --name ResearchVM \
+    --location westeurope \
+    --vnet-name ResearchVNet \
+    --subnet Data \
+    --image UbuntuLTS \
+    --admin-username azureuser \
+    --admin-password <password>
+
+# confirm VMs are running - uses the Linus watch command which will refresh every 5 secs
+# press Ctrl-c to stop teh watch command and continue
+watch -d -n 5 "az vm list \
+    --resource-group learn-0e79cd83-42e4-44c6-b8a2-a85b0e8db1b6 \
+    --show-details \
+    --query '[*].{Name:name, ProvisioningState:provisioningState, PowerState:powerState}' \
+    --output table"
+
+# Create vnet peering connections between SalesVNet and MarketingVNet
+az network vnet peering create \
+    --name SalesVNet-To-MarketingVNet \
+    --remote-vnet MarketingVNet \
+    --resource-group learn-0e79cd83-42e4-44c6-b8a2-a85b0e8db1b6 \
+    --vnet-name SalesVNet \
+    --allow-vnet-access
+
+# Create connection between Marketing and Research
+# create the peering connection between the MarketingVNet and ResearchVNet virtual networks
+az network vnet peering create \
+    --name MarketingVNet-To-ResearchVNet \
+    --remote-vnet ResearchVNet \
+    --resource-group learn-0e79cd83-42e4-44c6-b8a2-a85b0e8db1b6 \
+    --vnet-name MarketingVNet \
+    --allow-vnet-access
+# create the reciprocal connection between ResearchVNet and MarketingVNet
+az network vnet peering create \
+    --name ResearchVNet-To-MarketingVNet \
+    --remote-vnet MarketingVNet \
+    --resource-group learn-0e79cd83-42e4-44c6-b8a2-a85b0e8db1b6 \
+    --vnet-name ResearchVNet \
+    --allow-vnet-access
+
+# Check vnet peering connections
+# Check connection between SalesVNet and MarketingVNet
+az network vnet peering list \
+    --resource-group learn-0e79cd83-42e4-44c6-b8a2-a85b0e8db1b6 \
+    --vnet-name SalesVNet \
+    --output table
+
+# Check the peering connection between the ResearchVNet and MarketingVNet
+az network vnet peering list \
+    --resource-group learn-0e79cd83-42e4-44c6-b8a2-a85b0e8db1b6 \
+    --vnet-name MarketingVNet \
+    --output table
+
+# Check routes that apply to SalesVM nic
+az network nic show-effective-route-table \
+    --resource-group learn-0e79cd83-42e4-44c6-b8a2-a85b0e8db1b6 \
+    --name SalesVMVMNic \
+    --output table
+
+# Check routes for MarketingVM
+az network nic show-effective-route-table \
+    --resource-group learn-0e79cd83-42e4-44c6-b8a2-a85b0e8db1b6 \
+    --name MarketingVMVMNic \
+    --output table
+
+# Check routes for ResarchVM
+az network nic show-effective-route-table \
+    --resource-group learn-0e79cd83-42e4-44c6-b8a2-a85b0e8db1b6 \
+    --name ResearchVMVMNic \
+    --output table
+
+# Checl VM connectivity over vnet peerings
+# list the IP addresses you'll use to connect to the VMs
+az vm list \
+    --resource-group learn-0e79cd83-42e4-44c6-b8a2-a85b0e8db1b6 \
+    --query "[*].{Name:name, PrivateIP:privateIps, PublicIP:publicIps}" \
+    --show-details \
+    --output table
+
+# Test connections from SalesVNet
+# SSH to public IP of SalesVM
+ssh -o StrictHostKeyChecking=no azureuser@65.52.230.105
+
+# SSH to connect to the private IP address of MarketingVM to test network connectivity
+ssh -o StrictHostKeyChecking=no azureuser@<MarketingVM private IP>
+ssh -o StrictHostKeyChecking=no azureuser@10.2.1.4
+# exit to close connection
+
+# SSH to connect to the private IP address of ResearchVM to test network connectivity
+ssh -o StrictHostKeyChecking=no azureuser@<ResearchVM private IP>
+ssh -o StrictHostKeyChecking=no azureuser@10.3.1.4
+# should not be able to connect - up to 60 sec to timeout
+
+# Test connections from ResarchVM
+# SSH to public IP of ResearchVM
+ssh -o StrictHostKeyChecking=no azureuser@<ResearchVM public IP>
+ssh -o StrictHostKeyChecking=no azureuser@104.40.182.150
+
+# SSH to connect to the private IP address of MarketingVM to test network connectivity
+ssh -o StrictHostKeyChecking=no azureuser@<MarketingVM private IP>
+ssh -o StrictHostKeyChecking=no azureuser@10.2.1.4
+# exit to close connection
+
+# SSH to connect to the private IP address of SalesVM to test network connectivity
+ssh -o StrictHostKeyChecking=no azureuser@<SalesVM private IP>
+ssh -o StrictHostKeyChecking=no azureuser@10.1.1.4
+# should not be able to connect - up to 60 sec to timeout
+
+# Test connections from MarketingVM
+# SSH to public IP of MarketingVM
+ssh -o StrictHostKeyChecking=no azureuser@<MarketingVM public IP>
+ssh -o StrictHostKeyChecking=no azureuser@168.63.95.87
+
+# SSH to connect to the private IP address of ResearchVM to test network connectivity
+ssh -o StrictHostKeyChecking=no azureuser@<ResearchVM private IP>
+ssh -o StrictHostKeyChecking=no azureuser@10.3.1.4
+# should connect - exit
+
+# SSH to connect to the private IP address of SalesVM to test network connectivity
+ssh -o StrictHostKeyChecking=no azureuser@<SalesVM private IP>
+ssh -o StrictHostKeyChecking=no azureuser@10.1.1.4
+# should connect - exit
+
+
+
+
+
+
+
+
+
+
+
+
+
+
